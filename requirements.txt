@@ -1,0 +1,13 @@
+streamlit
+openai
+python-dotenv
+whisper
+elevenlabs
+faiss-cpu
+pandas
+numpy
+requests
+torch
+transformers
+sentence-transformers
+tiktoken
