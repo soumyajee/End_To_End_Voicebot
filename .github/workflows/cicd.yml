@@ -17,16 +17,19 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Debug AWS CLI Configuration
+      - name: Debug AWS Credentials
         run: |
+          echo "AWS Access Key: ${{ secrets.AWS_ACCESS_KEY_ID }}"
+          echo "AWS Secret Key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+          echo "AWS Region: ${{ secrets.AWS_DEFAULT_REGION }}"
           aws sts get-caller-identity
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}  # Use the region from GitHub secrets
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -40,7 +43,6 @@ jobs:
           docker buildx create --use
           docker buildx inspect --bootstrap
           
-          # Correcting the repository path
           docker buildx build --platform linux/amd64 --push \
             -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
 
@@ -49,12 +51,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Debug AWS CLI Configuration
+      - name: Debug AWS Credentials
         run: |
+          echo "AWS Access Key: ${{ secrets.AWS_ACCESS_KEY_ID }}"
+          echo "AWS Secret Key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+          echo "AWS Region: ${{ secrets.AWS_DEFAULT_REGION }}"
           aws sts get-caller-identity
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
