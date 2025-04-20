@@ -1,20 +1,23 @@
-name: Deploy Streamlit Euron Chatbot to AWS EC2
+name: CI/CD - Deploy Euron Chatbot to AWS EC2
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]  # CI/CD triggers on every push to main
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-    - name: 📦 Checkout code
+    # 📁 Pull source code
+    - name: 📥 Checkout Repository
       uses: actions/checkout@v3
 
+    # 🛠️ Set up Docker Buildx
     - name: 🐳 Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
+    # 🔐 AWS credentials from GitHub Secrets
     - name: 🔐 Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v3
       with:
@@ -22,32 +25,50 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ secrets.AWS_REGION }}
 
-    - name: 🔑 Set up SSH
+    # 🚀 Login to Amazon ECR
+    - name: 🔐 Login to Amazon ECR
+      run: |
+        aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
+        docker login --username AWS --password-stdin \
+        ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+
+    # 🛠️ Build and Push Docker Image to ECR
+    - name: 🐳 Build and Push Docker Image
+      env:
+        IMAGE_URI: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/euron-chatbot:latest
+      run: |
+        docker build -t $IMAGE_URI .
+        docker push $IMAGE_URI
+
+    # 🔑 Set up SSH connection to EC2
+    - name: 🔐 Setup SSH Access
       uses: webfactory/ssh-agent@v0.8.0
       with:
         ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
 
-    - name: 🐳 Login to Amazon ECR
-      id: login-ecr
-      run: |
-        aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
-        docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
-
-    - name: 🛠️ Build and Push Docker image to ECR
-      run: |
-        IMAGE_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/euron-chatbot:latest
-        docker build -t $IMAGE_URI .
-        docker push $IMAGE_URI
-
-    - name: 🚀 SSH into EC2 and deploy container
+    # 🚀 Deploy Docker container on EC2
+    - name: 🚀 Deploy on EC2
       run: |
         ssh -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_HOST }} << 'EOF'
-        aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
-          docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
-        docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/euron-chatbot:latest
-        docker stop euron-chatbot || true && docker rm euron-chatbot || true
-        docker run -d -p 80:8501 --name euron-chatbot \
-          -e OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
-          -e ELEVENLABS_API_KEY=${{ secrets.ELEVENLABS_API_KEY }} \
-          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/euron-chatbot:latest
+          echo "✅ Logged in to EC2 instance"
+
+          # Authenticate with ECR
+          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
+            docker login --username AWS --password-stdin \
+            ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+
+          # Pull latest Docker image
+          docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/euron-chatbot:latest
+
+          # Stop and remove old container
+          docker stop euron-chatbot || true && docker rm euron-chatbot || true
+
+          # Run new container with API keys
+          docker run -d --name euron-chatbot \
+            -p 80:8501 \
+            -e OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
+            -e ELEVENLABS_API_KEY=${{ secrets.ELEVENLABS_API_KEY }} \
+            ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/euron-chatbot:latest
+
+          echo "🚀 Deployment complete!"
         EOF
