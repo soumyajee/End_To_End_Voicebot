@@ -22,7 +22,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}  # ✅ Matches your GitHub secret
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -35,11 +35,8 @@ jobs:
         run: |
           docker buildx create --use
           docker buildx inspect --bootstrap
-          
-          # Correcting the repository path
           docker buildx build --platform linux/amd64 --push \
             -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-
 
   Continuous-Deployment:
     needs: Continuous-Integration
@@ -51,7 +48,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}  # ✅ Use same region secret
 
       - name: Create SSH key file
         run: |
@@ -73,22 +70,23 @@ jobs:
             sudo systemctl start docker || true
 
             echo "Logging in to ECR..."
-            aws ecr get-login-password --region ${{ secrets.AWS_DEFAULT_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.ECR_REPO }}
+            aws ecr get-login-password --region ${{ secrets.AWS_DEFAULT_REGION }} | sudo docker login --username AWS --password-stdin $ECR_REGISTRY
 
             echo "Stopping and removing old container..."
             sudo docker stop sentiment_app || true
             sudo docker rm sentiment_app || true
 
             echo "Pulling latest Docker image..."
-            sudo docker pull ${{ secrets.ECR_REPO }}:latest
+            sudo docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
             echo "Running new container..."
             sudo docker run -d --name sentiment_app -p 8080:8080 \
               -e AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
               -e AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
               -e AWS_DEFAULT_REGION="${{ secrets.AWS_DEFAULT_REGION }}" \
-              ${{ secrets.ECR_REPO }}:latest
+              -e OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
+              -e ELEVENLABS_API_KEY="${{ secrets.ELEVENLABS_API_KEY }}" \
+              $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
             echo "Cleaning up unused Docker images..."
             sudo docker system prune -f
-
