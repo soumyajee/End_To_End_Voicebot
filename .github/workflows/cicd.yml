@@ -1,74 +1,94 @@
-name: CI/CD - Deploy Euron Chatbot to AWS EC2
+name: Deploy Sentiment Analysis App to EC2
 
 on:
   push:
-    branches: [main]  # CI/CD triggers on every push to main
+    branches: [main]
+
+env:
+  ECR_REGISTRY: 703671911783.dkr.ecr.ap-south-1.amazonaws.com
+  ECR_REPOSITORY: voicebot
+  IMAGE_TAG: latest
 
 jobs:
-  build-and-deploy:
+  Continuous-Integration:
     runs-on: ubuntu-latest
 
     steps:
-    # 📁 Pull source code
-    - name: 📥 Checkout Repository
-      uses: actions/checkout@v3
+      - name: Checkout Code
+        uses: actions/checkout@v3
 
-    # 🛠️ Set up Docker Buildx
-    - name: 🐳 Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
 
-    # 🔐 AWS credentials from GitHub Secrets
-    - name: 🔐 Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v3
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ secrets.AWS_REGION }}
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
 
-    # 🚀 Login to Amazon ECR
-    - name: 🔐 Login to Amazon ECR
-      run: |
-        aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
-        docker login --username AWS --password-stdin \
-        ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
 
-    # 🛠️ Build and Push Docker Image to ECR
-    - name: 🐳 Build and Push Docker Image
-      env:
-        IMAGE_URI: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/euron-chatbot:latest
-      run: |
-        docker build -t $IMAGE_URI .
-        docker push $IMAGE_URI
+      - name: Build, tag, and push Docker image to Amazon ECR
+        run: |
+          docker buildx create --use
+          docker buildx inspect --bootstrap
+          
+          # Correcting the repository path
+          docker buildx build --platform linux/amd64 --push \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
 
-    # 🔑 Set up SSH connection to EC2
-    - name: 🔐 Setup SSH Access
-      uses: webfactory/ssh-agent@v0.8.0
-      with:
-        ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
 
-    # 🚀 Deploy Docker container on EC2
-    - name: 🚀 Deploy on EC2
-      run: |
-        ssh -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_HOST }} << 'EOF'
-          echo "✅ Logged in to EC2 instance"
+  Continuous-Deployment:
+    needs: Continuous-Integration
+    runs-on: ubuntu-latest
 
-          # Authenticate with ECR
-          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
-            docker login --username AWS --password-stdin \
-            ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
 
-          # Pull latest Docker image
-          docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/euron-chatbot:latest
+      - name: Create SSH key file
+        run: |
+          echo "${{ secrets.EC2_SSH_KEY }}" > ec2-key.pem
+          chmod 600 ec2-key.pem
 
-          # Stop and remove old container
-          docker stop euron-chatbot || true && docker rm euron-chatbot || true
+      - name: Deploy Docker container on EC2
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          script: |
+            echo "Checking system updates..."
+            sudo apt-get update -y && sudo apt-get install -y awscli docker
 
-          # Run new container with API keys
-          docker run -d --name euron-chatbot \
-            -p 80:8501 \
-            -e OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
-            -e ELEVENLABS_API_KEY=${{ secrets.ELEVENLABS_API_KEY }} \
-            ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/euron-chatbot:latest
+            echo "Starting Docker service..."
+            sudo systemctl start docker || true
 
-          echo "🚀 Deployment complete!"
-        EOF
+            echo "Logging in to ECR..."
+            aws ecr get-login-password --region ${{ secrets.AWS_DEFAULT_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.ECR_REPO }}
+
+            echo "Stopping and removing old container..."
+            sudo docker stop sentiment_app || true
+            sudo docker rm sentiment_app || true
+
+            echo "Pulling latest Docker image..."
+            sudo docker pull ${{ secrets.ECR_REPO }}:latest
+
+            echo "Running new container..."
+            sudo docker run -d --name sentiment_app -p 8080:8080 \
+              -e AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
+              -e AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
+              -e AWS_DEFAULT_REGION="${{ secrets.AWS_DEFAULT_REGION }}" \
+              ${{ secrets.ECR_REPO }}:latest
+
+            echo "Cleaning up unused Docker images..."
+            sudo docker system prune -f
+
